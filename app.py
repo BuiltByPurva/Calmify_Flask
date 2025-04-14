@@ -18,6 +18,8 @@ from PIL import Image
 from emotion_detector import EmotionDetector
 import chromadb
 import json
+import gdown
+import tensorflow as tf
 
 load_dotenv()
 
@@ -25,8 +27,42 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # ============= Stress Prediction Model Setup =============
-MODEL_PATH = 'adaboost_model.pkl'
-SCALER_PATH = 'scaler.pkl'
+MODEL_FILE_ID = "1rRnZvF2yO5in_xWtoVctNLdAqwRASqGS"
+MODEL_WEIGHTS_PATH = "model.weights.h5"
+MODEL_JSON_PATH = "model.json"
+
+# Download model weights if it doesn't exist
+if not os.path.exists(MODEL_WEIGHTS_PATH):
+    print("Downloading model weights from Google Drive...")
+    try:
+        # Use direct download URL format
+        url = f"https://drive.google.com/uc?export=download&id={MODEL_FILE_ID}"
+        gdown.download(url, MODEL_WEIGHTS_PATH, quiet=False)
+    except Exception as e:
+        print(f"Download attempt failed: {e}")
+        print("Please ensure the file is shared with 'Anyone with the link' permission")
+        raise
+
+    if os.path.exists(MODEL_WEIGHTS_PATH):
+        print("Model weights downloaded successfully!")
+    else:
+        raise Exception("Failed to download the model weights file")
+
+# Initialize the model
+try:
+    # Load model architecture from JSON
+    with open(MODEL_JSON_PATH, 'r') as f:
+        model_config = json.load(f)
+    
+    # Create model from config
+    model = tf.keras.models.model_from_json(json.dumps(model_config))
+    
+    # Load the weights
+    model.load_weights(MODEL_WEIGHTS_PATH)
+    print("Model loaded successfully!")
+except Exception as e:
+    print(f"Error loading model: {e}")
+    raise
 
 # Stress level labels
 STRESS_LABELS = {
@@ -37,21 +73,8 @@ STRESS_LABELS = {
     4: "Extreme Stress"
 }
 
-model = None
-scaler = None
-
-if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
-    try:
-        model = joblib.load(MODEL_PATH)
-        scaler = joblib.load(SCALER_PATH)
-        print("Stress prediction model and scaler loaded successfully")
-    except Exception as e:
-        print(f"Error loading stress prediction model: {e}")
-else:
-    print(f"Stress prediction model files not found. Please ensure {MODEL_PATH} and {SCALER_PATH} exist in the backend directory")
-
 # ============= Emotion Detection Setup =============
-emotion_detector = EmotionDetector()
+emotion_detector = EmotionDetector(model)
 print("Emotion detection model loaded successfully!")
 
 # ============= Chatbot Model Setup =============
@@ -109,10 +132,10 @@ else:
 # ============= API Routes =============
 @app.route('/predict', methods=['POST'])
 def predict():
-    if model is None or scaler is None:
+    if model is None:
         return jsonify({
-            'error': 'Stress prediction model not loaded. Please ensure model files exist and are properly loaded.',
-            'details': f'Required files: {MODEL_PATH}, {SCALER_PATH}'
+            'error': 'Stress prediction model not loaded. Please ensure model file exists and is properly loaded.',
+            'details': f'Required file: {MODEL_WEIGHTS_PATH}'
         }), 500
 
     try:
@@ -152,11 +175,8 @@ def predict():
             heart_rate
         ]])
         
-        # Scale the input data
-        input_data_scaled = scaler.transform(input_data)
-        
         # Make prediction
-        prediction = model.predict(input_data_scaled)[0]
+        prediction = model.predict(input_data)[0]
         
         # Map prediction to stress level (0-4)
         stress_level = int(prediction)

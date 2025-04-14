@@ -1,30 +1,34 @@
 import cv2
 import numpy as np
-from tensorflow.keras.models import model_from_json
+import tensorflow as tf
 import os
 import csv
 from datetime import datetime
 import pandas as pd
 
 class EmotionDetector:
-    def __init__(self):
-        # Load the model architecture and weights
-        model_json_path = os.path.join(os.path.dirname(__file__), "model.json")
-        model_weights_path = os.path.join(os.path.dirname(__file__), "model.weights.h5")
-        
-        # Load the model architecture
-        with open(model_json_path, "r") as json_file:
-            model_json = json_file.read()
-            self.model = model_from_json(model_json)
-        
-        # Load the weights
-        self.model.load_weights(model_weights_path)
+    def __init__(self, model=None):
+        # Store the provided model or load it if not provided
+        if model is not None:
+            self.model = model
+        else:
+            # Load the model architecture and weights
+            model_json_path = os.path.join(os.path.dirname(__file__), "model.json")
+            model_weights_path = os.path.join(os.path.dirname(__file__), "model.weights.h5")
+            
+            # Load the model architecture
+            with open(model_json_path, "r") as json_file:
+                model_json = json_file.read()
+                self.model = tf.keras.models.model_from_json(model_json)
+            
+            # Load the weights
+            self.model.load_weights(model_weights_path)
         
         # Define emotion labels
         self.emotion_labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neutral']
         
         # Load face detection cascade
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        cascade_path = os.path.join(os.path.dirname(__file__), "haarcascade_frontalface_default.xml")
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
         
         # Define input shape for the model
@@ -89,59 +93,51 @@ class EmotionDetector:
         except Exception as e:
             print(f"Error analyzing stress trend: {str(e)}")
     
-    def preprocess_image(self, face_img):
-        # Convert to grayscale
-        gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-        # Resize to model input size
-        resized = cv2.resize(gray, (48, 48))
-        # Normalize pixel values
-        normalized = resized / 255.0
-        # Reshape for model input
-        reshaped = normalized.reshape(1, 48, 48, 1)
-        return reshaped
-    
-    def detect_emotion(self, image_data):
+    def preprocess_image(self, image_data):
         # Convert image data to numpy array
         nparr = np.frombuffer(image_data, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
-        # Convert frame to grayscale
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         # Detect faces
-        faces = self.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(30, 30)
-        )
+        faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
         
-        results = []
+        if len(faces) == 0:
+            return None
+            
+        # Get the first face
+        x, y, w, h = faces[0]
+        face = gray[y:y+h, x:x+w]
         
-        for (x, y, w, h) in faces:
-            # Extract face ROI
-            face_roi = frame[y:y+h, x:x+w]
-            
-            # Preprocess face image
-            processed_face = self.preprocess_image(face_roi)
-            
-            # Predict emotion
-            prediction = self.model.predict(processed_face)
-            emotion_idx = np.argmax(prediction[0])
-            emotion = self.emotion_labels[emotion_idx]
-            confidence = float(prediction[0][emotion_idx])
-            
-            results.append({
-                'emotion': emotion,
-                'confidence': confidence,
-                'bbox': (x, y, w, h)
-            })
+        # Resize to 48x48
+        face = cv2.resize(face, (48, 48))
         
-        if results:
-            # Get the result with highest confidence
-            best_result = max(results, key=lambda x: x['confidence'])
-            # Log the emotion
-            self.log_emotion(best_result['emotion'], best_result['confidence'])
-            return best_result['emotion'], best_result['confidence']
-        else:
+        # Normalize
+        face = face / 255.0
+        
+        # Reshape for model input
+        face = np.expand_dims(face, axis=0)
+        face = np.expand_dims(face, axis=-1)
+        
+        return face
+        
+    def detect_emotion(self, image_data):
+        # Preprocess the image
+        processed_image = self.preprocess_image(image_data)
+        
+        if processed_image is None:
             return None, 0.0
+            
+        # Make prediction
+        prediction = self.model.predict(processed_image)
+        
+        # Get emotion and confidence
+        emotion_idx = np.argmax(prediction[0])
+        confidence = prediction[0][emotion_idx]
+        
+        # Log the emotion
+        self.log_emotion(self.emotion_labels[emotion_idx], confidence)
+        
+        return self.emotion_labels[emotion_idx], confidence
