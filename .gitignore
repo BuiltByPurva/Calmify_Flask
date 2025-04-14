@@ -43,5 +43,3 @@ dataset/
 Thumbs.db
 
 model.weights.h5
-scaler.pkl
-adaboost_model.pkl
